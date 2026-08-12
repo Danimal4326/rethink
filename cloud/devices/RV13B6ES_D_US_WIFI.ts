@@ -75,10 +75,9 @@ const LOAD_ITEM_OFFSET = 23
 
 const PHASE_OFF = 0x00
 
-// Phase/status byte. 0x00/0x01/0x03/0x32 were observed directly and cross-checked against the cloud's
-// state field (POWEROFF / INITIAL / PAUSE / DRYING). 0x33 and 0x04 are carried over from the closely
-// related RV13B6BSD_D_US_WIFI, whose frame layout this model shares byte for byte; anything genuinely
-// unmapped falls back to 'Running' rather than being reported wrongly.
+// Phase/status byte. Every value below was observed directly on this appliance across a full Speed Dry
+// run and cross-checked against the cloud's own state field (POWEROFF / INITIAL / PAUSE / DRYING /
+// COOLING / END). Anything outside this table falls back to 'Running' rather than being reported wrongly.
 const STATUS: Record<number, string> = {
     0x00: 'Off',
     0x01: 'Initial',

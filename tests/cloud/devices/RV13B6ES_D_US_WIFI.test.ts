@@ -82,6 +82,17 @@ const COOLING = buf(
     'aa4030ec001b320006000a100000020001f10000002900000e0300000064000000001b330005000a100000020001f100000029000012320000006400000062bb',
 )
 
+// Cooling -> End, cloud preState:"COOLING" state:"END".
+const ENDS = buf(
+    'aa4030ec001b330001000b100000020001f1000000290000243200000064000000001b040001000b100000020001f1000040280000243300000064000000ccbb',
+)
+
+// End -> Off ~30s later: course, temperature and the More/Less trim all reset to their zero sentinel,
+// matching the cloud's courseDryer27inchBase:"NOT_SELECTED" and moreLessTime:0.
+const SETTLES_OFF = buf(
+    'aa4030ec001b040001000b100000020001f1000040280000243300000064000000001b0000010001000000000001000000402800002404000000640000003fbb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -194,6 +205,19 @@ describe('RV13B6ES_D_US_WIFI', () => {
         // remaining counts down while the initial estimate stays pinned
         assert.equal(cooling.remaining_time, 5)
         assert.equal(cooling.initial_time, 10)
+    })
+
+    test('the run finishes: Cooling -> End -> Off, and Off clears the selection', () => {
+        const ended = feed([STARTS_DRYING, RESUMES, COOLING, ENDS])
+        assert.equal(ended.status, 'End')
+        assert.equal(ended.power, 'ON') // End is still powered on, just finished
+
+        const off = feed([STARTS_DRYING, RESUMES, COOLING, ENDS, SETTLES_OFF])
+        assert.equal(off.status, 'Off')
+        assert.equal(off.power, 'OFF')
+        assert.equal(off.course, 'unknown') // cloud: courseDryer27inchBase "NOT_SELECTED"
+        assert.equal(off.remaining_time, 0)
+        assert.equal(off.more_less_time, 0)
     })
 
     test('frames that are not status frames publish nothing', () => {
