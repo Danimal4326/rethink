@@ -1,0 +1,15 @@
+{"ts":1786512000000,"k":"session","v":1,"deviceId":"selftest","tool":"selftest"}
+{"ts":1786512000100,"k":"note","author":"human","text":"EB_IDLE (powered off, nothing selected)"}
+{"ts":1786512000200,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa2330eb001b0000010001000000000004000000402800065f04000000640000006bbb","protocol":"aabb","checksumOk":true}
+{"ts":1786512002000,"k":"note","author":"human","text":"OFF_TO_INITIAL (dial browsing begins)"}
+{"ts":1786512002100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa4030ec001b0000010001000000000004000000402800065f0400000064000000001b0100010001000000000004000000402800000000000000640000001fbb","protocol":"aabb","checksumOk":true}
+{"ts":1786512004000,"k":"note","author":"human","text":"COURSE_NORMAL selected"}
+{"ts":1786512004100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa4030ec001b010001000100000000000400000000280000000000000064000000001b010029002903000304000400000000280000000000000064000000e9bb","protocol":"aabb","checksumOk":true}
+{"ts":1786512006000,"k":"note","author":"human","text":"COURSE_BEDDING selected"}
+{"ts":1786512006100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa4030ec001b010039003903000304000400000000aa0000000000000064000000001b010037003707000303000400000000a8000000000000006400000002bb","protocol":"aabb","checksumOk":true}
+{"ts":1786512008000,"k":"note","author":"human","text":"SMALL_LOAD starts drying"}
+{"ts":1786512008100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa4030ec001b01001e001e09000305000400000000a80000000000000064000000001b32001e001e09000305000400000000a800000001000000640000007fbb","protocol":"aabb","checksumOk":true}
+{"ts":1786512010000,"k":"note","author":"human","text":"CHILD_LOCK engaged"}
+{"ts":1786512010100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa4030ec001b03010a010a080005050004000000402800000e3200000064000000001b03010a010a080005050004000000412800000e3200000064000000e6bb","protocol":"aabb","checksumOk":true}
+{"ts":1786512012000,"k":"note","author":"human","text":"heartbeat (should be ignored)"}
+{"ts":1786512012100,"k":"wire","dir":"fromDevice","injected":false,"hex":"aa0730d82b91bb","protocol":"aabb","checksumOk":true}
