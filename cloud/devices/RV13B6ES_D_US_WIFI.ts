@@ -46,6 +46,12 @@ const INITIAL_TIME_MIN_OFFSET = 5
 const COURSE_OFFSET = 6
 const DRY_LEVEL_OFFSET = 8
 const TEMP_OFFSET = 9
+// rec[11]: the Signal (end-of-cycle beeper) setting. This one is NOT cloud-confirmed like everything else
+// in this file — the LG cloud sends no signal field for this dryer at all (verified against a full
+// allDeviceInfoUpdate snapshot). It was mapped from the wire alone: pressing Signal cycles the byte
+// 0x00 -> 0x01 -> 0x04 -> 0x00 with nothing else in the record moving, and the three values were tied to
+// the panel's own Off/Low/High indicator by reading the lit LED after each press.
+const SIGNAL_OFFSET = 11
 // rec[12]: the More/Less Time adjustment, a SIGNED byte holding the number of minutes added to or
 // removed from the course's default time. Confirmed against the cloud's moreLessTime (which reports the
 // same byte unsigned) across a Speed Dry trimmed from its 25-minute default down to 10:
@@ -126,6 +132,13 @@ const TEMP: Record<number, string> = {
     3: 'Medium',
     4: 'Mid High',
     5: 'High',
+}
+
+// Signal (beeper) volume. Panel-confirmed rather than cloud-confirmed — see SIGNAL_OFFSET.
+const SIGNAL: Record<number, string> = {
+    0x00: 'Off',
+    0x01: 'Low',
+    0x04: 'High',
 }
 
 export default class Device extends AABBDevice {
@@ -217,6 +230,14 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:tshirt-crew-outline',
                         state_class: 'measurement',
                     },
+                    signal: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-signal',
+                        state_topic: '$this/signal',
+                        name: 'Signal',
+                        icon: 'mdi:bell-outline',
+                        entity_category: 'diagnostic',
+                    },
                     reduce_static: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-reduce_static',
@@ -292,6 +313,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('dry_level', DRY_LEVEL[rec[DRY_LEVEL_OFFSET]] ?? 'unknown')
         this.publishProperty('temp', TEMP[rec[TEMP_OFFSET]] ?? 'unknown')
         this.publishProperty('load_item', rec[LOAD_ITEM_OFFSET])
+        this.publishProperty('signal', SIGNAL[rec[SIGNAL_OFFSET]] ?? 'unknown')
         // signed: negative trims the course default, positive extends it
         this.publishProperty('more_less_time', isOff ? 0 : rec.readInt8(MORE_LESS_TIME_OFFSET))
 

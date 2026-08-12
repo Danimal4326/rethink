@@ -93,6 +93,19 @@ const SETTLES_OFF = buf(
     'aa4030ec001b040001000b100000020001f1000040280000243300000064000000001b0000010001000000000001000000402800002404000000640000003fbb',
 )
 
+// Signal (beeper) volume, rec[11]. Unlike every other fixture here this one is NOT cloud-confirmed — the
+// LG cloud sends no signal field for this dryer at all — so the three values were tied to the panel's own
+// Off/Low/High indicator by reading the lit LED after each press.
+const SIGNAL_OFF = buf(
+    'aa4030ec001b010036003601000305000400000040280000000000000064000000001b01003600360100030500000000004028000000000000006400000091bb',
+)
+const SIGNAL_LOW = buf(
+    'aa4030ec001b010036003601000305000000000040280000000000000064000000001b01003600360100030500010000004028000000000000006400000094bb',
+)
+const SIGNAL_HIGH = buf(
+    'aa4030ec001b010029002903000304000100000040280000000000000064000000001b010029002903000304000400000040280000000000000064000000c6bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -218,6 +231,16 @@ describe('RV13B6ES_D_US_WIFI', () => {
         assert.equal(off.course, 'unknown') // cloud: courseDryer27inchBase "NOT_SELECTED"
         assert.equal(off.remaining_time, 0)
         assert.equal(off.more_less_time, 0)
+    })
+
+    test('the Signal beeper setting is read from rec[11]', () => {
+        assert.equal(feed([SIGNAL_OFF]).signal, 'Off')
+        assert.equal(feed([SIGNAL_LOW]).signal, 'Low')
+        assert.equal(feed([SIGNAL_HIGH]).signal, 'High')
+        // pressing Signal must not disturb the neighbouring fields
+        const p = feed([SIGNAL_HIGH])
+        assert.equal(p.course, 'Normal')
+        assert.equal(p.dry_level, 'Normal')
     })
 
     test('frames that are not status frames publish nothing', () => {

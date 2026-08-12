@@ -6,13 +6,14 @@ import { allowExtendedType } from '@/util/casting'
 import AABBDevice from './aabb_device'
 
 // LG front-load washer — matched on modelId "F3L7CYK5W_US_WIFI". Shares the AABB record layout of the
-// F3L2CYU__ sibling exactly (25-byte record led by a 0x18 marker), but it is NOT an alias of it:
-//   * rec[4:6] carries a persistent initial-cycle-time estimate. The sibling's notes state that model has
-//     no such field and reuse the countdown bytes for both purposes; this model genuinely has both.
-//   * rec[11] behaves differently. On the sibling it is a static setting whose HIGH nibble holds the
-//     extra-rinse count. Here the high nibble is never set (so the sibling's `>>4` would report a
-//     permanent 0) and the LOW nibble counts DOWN as the cycle progresses — see the note at
-//     RINSE_COUNTDOWN_OFFSET below.
+// F3L2CYU__ sibling (25-byte record led by a 0x18 marker) but is NOT an alias of it:
+//   * The course table is genuinely different — not a superset or a renaming, a different assignment.
+//     Aliasing would mislabel nine of the twelve dial positions (it would call Normal "Heavy Duty").
+//   * rec[11] packs two fields: the low nibble is a live rinse count, the high nibble the extra-rinse
+//     setting. The sibling documents the low nibble as "a constant 1".
+//   * rec[15] carries two option bits the sibling does not have (child lock, Rinse+Spin), and this model
+//     has no TurboWash button at all, so the sibling's 0x80 is left unmapped rather than inherited.
+//   * rec[4:6] is a persistent initial-cycle-time estimate. The sibling states that model has none.
 //   * rec[22] and rec[24] carry fields the sibling does not decode.
 //
 // Frames are discriminated by buf[1] (buf[0] == 0x20 on every frame):
@@ -30,11 +31,12 @@ import AABBDevice from './aabb_device'
 //   0x31        one-time device-ID/serial frame at connect — not decoded.
 //   0x72, 0xD8  short heartbeat/ping frames — not decoded.
 //
-// PROVENANCE, and it differs from the sibling's: these offsets were confirmed from a passive capture of
-// three complete real wash cycles (plus one dial sweep) taken WITHOUT the LG cloud bridge, so unlike the
-// sibling there are no authoritative cloud field names behind them. Everything published below is
-// therefore confirmed *behaviourally* — by how the byte moves through a real cycle — and every field whose
-// behaviour did not pin it down is omitted rather than guessed. See the omission list at the end.
+// All offsets below are live-verified against the LG cloud's own decoded washerDryer state: captured real
+// traffic while driving the physical washer (dial sweep through every position, single-variable settings
+// toggles, three complete wash cycles, pause/resume, Add Garments mid-cycle) and correlated each byte
+// change against the cloud field that moved with it. Cloud notifications were filtered on the capture
+// tool's matchesDevice flag — the dryer on the same account emits washerDryer updates that share key
+// names (state, preState, temp), and merging those in silently corrupts the mapping.
 
 const STATUS_FRAME_TYPE = 0xec
 const STATUS_FRAME_LEN = 54 // 3B header + 26B record A (old) + 25B record B (current)
@@ -48,93 +50,109 @@ const RECORD_MARKER = 0x18
 
 // Offsets below are relative to the record's own 0x18 marker (rec[0]).
 const PHASE_OFFSET = 1
-// rec[2:4] = [hour][minute], the live countdown. Confirmed over three full cycles counting down
-// monotonically to 1 immediately before the machine reported Complete.
+// rec[2:4] = [hour][minute], the live countdown, matching the cloud's remainTimeHour/Minute.
 const TIME_HOUR_OFFSET = 2
 const TIME_MIN_OFFSET = 3
-// rec[4:6] = [hour][minute], the cycle's total/initial time estimate. While the machine is Selecting this
-// tracks rec[2:4] exactly; the moment a cycle starts it PINS and stays fixed while rec[2:4] counts down
-// (observed pinned at 80 minutes for one run and 58 for two others, across 161 frames). This is the field
-// the F3L2CYU__ sibling does not have.
+// rec[4:6] = [hour][minute], the cycle's total estimate, matching initialTimeHour/Minute. While the
+// machine is idle this tracks rec[2:4] exactly; the moment a cycle starts it PINS and stays fixed while
+// rec[2:4] counts down (observed pinned at 80 minutes for one run and 58 for two others).
 const INITIAL_TIME_HOUR_OFFSET = 4
 const INITIAL_TIME_MIN_OFFSET = 5
-// rec[6]: course/dial-position identifier. 0x00 and 0xFE are both no-selection sentinels (0xFE is what
-// this model parks on at power-off and after Complete).
 const COURSE_OFFSET = 6
 const SOIL_OFFSET = 8
 const SPIN_OFFSET = 9
 const TEMP_OFFSET = 10
-// rec[15]/rec[16] are the sibling's two option bitfields. Only the rec[16] door-lock bit is published —
-// see the omission list; the option bits were never observed toggling on this unit, and the RV13B6ES
-// dryer proved that bit positions genuinely do move between otherwise byte-identical LG siblings.
+// rec[11] packs two independent fields, each confirmed by isolating it against its own cloud enum:
+//   low nibble  = rinseCount   (RINSE_1/2/3) — how many rinses this cycle will do, and it decrements as
+//                 they complete, reaching 0 by the spin phase.
+//   high nibble = extraRinseCount (NO_EXTRARINSE / EXTRARINSE_1/2/3) — watched step 1->2->3->0 across two
+//                 full presses of the Extra Rinse button.
+// The sibling reads only the high nibble and calls the low nibble a constant; here it is neither constant
+// nor static.
+const RINSE_OFFSET = 11
+// rec[13:15] = [hour][minute], the Delay Wash reserve clock, matching reserveTimeHour. Confirmed by
+// stepping the delay from 2 up to 19 hours and watching rec[13] track it exactly.
+const RESERVE_HOUR_OFFSET = 13
+const RESERVE_MIN_OFFSET = 14
+// rec[15]: options bitfield. Every bit below was isolated with a single-variable toggle and matched to the
+// cloud field named beside it. Bit 0x80 is TurboWash on the sibling; this model HAS NO TurboWash button
+// (confirmed against the physical control panel), so it is deliberately left unmapped rather than
+// inherited on faith.
+const FLAGS_OFFSET = 15
+// Child lock. Both the sibling washer and the RV13B6BSD dryer document this as unfindable in device
+// frames ("appears cloud-side only"); on this model it is rec[15] bit 0x01, confirmed against
+// childLock:"CHILDLOCK_ON" 1s after the press.
+const FLAG_CHILD_LOCK = 0x01
+const FLAG_DELAY_ACTIVE = 0x02
+const FLAG_STEAM = 0x04
+const FLAG_PRE_WASH = 0x08
+// Rinse+Spin. Not present on the sibling at all. Selecting it also zeroes the soil and temperature
+// indices, which is why those report unknown while it is active.
+const FLAG_RINSE_SPIN = 0x20
+const FLAG_EXTRA_RINSE = 0x40
+// rec[16]: a separate bitfield from rec[15].
 const OPT2_OFFSET = 16
+const OPT2_COLD_WASH = 0x10
+// Door lock, confirmed by watching it unlock when Add Garments was pressed mid-cycle and relock on resume.
+// NOTE: the cloud's remoteStart moved in lockstep with this bit throughout the capture, so a remote-start
+// bit could not be separated from it; no remote_start entity is published as a result.
 const OPT2_DOOR_LOCKED = 0x80
-// rec[17]: door-closed sensor, independent of the rec[16] lock bit. Confirmed toggling mid-capture when
-// the door was shut ~18s after the machine was switched on, and again when it unlocked at Complete.
+// rec[17]: door sensor, matching doorClose in both directions, independent of the rec[16] lock bit. Bit
+// 0x10 also sets during Add Garments and Pause — unidentified, so not published.
 const DOOR_OFFSET = 17
 const DOOR_CLOSED = 0x02
-// rec[20]: the phase the machine was in BEFORE the current one (not the previous frame's phase — it holds
-// steady across every frame of a phase). Verified against the full phase sequence of three cycles with no
-// disagreement. Not published as an entity (the dryer driver treats its equivalent the same way), but it
-// is what makes a frame self-describing when read in isolation.
-const PREV_PHASE_OFFSET = 20
-// rec[22]: a completed-cycle counter. It incremented by exactly one at each Spinning -> Complete
-// transition and at no other point in a 12.7-hour capture (43 -> 44 -> 45 -> 46 over three washes).
-// Published for what it is observed to do; whether LG scopes it to "since last Tub Clean" or to the life
-// of the machine is not determinable from this capture.
-const CYCLE_COUNT_OFFSET = 22
+// rec[20]: the phase the machine was in before the current one — literally the cloud's preState, and it
+// holds steady across every frame of a phase rather than tracking the previous frame. Not published as an
+// entity (the RV13B6ES dryer driver treats its equivalent the same way).
+// rec[22]: the cloud's TCLCount — washes since the last Tub Clean. Read 46 while the cloud reported 46,
+// and incremented by exactly one at each Spinning -> Complete transition across three cycles.
+const TCL_COUNT_OFFSET = 22
+// rec[24]: the cloud's loadLevel, a direct value latched when Sensing hands over to Washing.
+const LOAD_LEVEL_OFFSET = 24
 
 const PHASE_OFF = 0x00
 const PHASE_COMPLETE = 0x3c
 
-// Phase/status byte. Off/Selecting/Sensing/Washing/Rinsing/Spinning/Complete were each observed directly,
-// in that order, on three real cycles. Paused and Delay Wash are carried over from the F3L2CYU__ sibling
-// and were NOT exercised here — they are harmless to include because anything genuinely unmapped falls
-// back to 'Running'.
-// Worth noting for the sibling: it lists 0x14 as unconfirmed because its capture went straight from
-// Selecting to Washing. This model emits 0x14 as a distinct ~45-second step before Washing on every run,
-// which corroborates the Sensing reading.
+// Phase/status byte, named after the cloud's own state enum. Off/Initial/Pause/Add Garments/Rinsing were
+// confirmed directly against the cloud in this session; Sensing/Washing/Spinning/Complete were observed in
+// their correct sequence across three full cycles. Delay Wash (0x0a) is carried over from the sibling and
+// was not exercised. Anything unmapped falls back to 'Running'.
 const STATUS: Record<number, string> = {
     0x00: 'Off',
-    0x05: 'Selecting',
-    0x06: 'Paused',
+    0x05: 'Initial',
+    0x06: 'Pause',
     0x0a: 'Delay Wash',
     0x14: 'Sensing',
+    0x15: 'Add Garments', // cloud: ADD_DRAIN — the paused-with-door-unlocked state
     0x17: 'Washing',
     0x1e: 'Rinsing',
     0x28: 'Spinning',
     0x3c: 'Complete',
 }
 
-// Course identifier -> name, inherited from the F3L2CYU__ sibling, whose table was confirmed against the
-// LG cloud's own apCourseFLUpper25inchBaseUS enum.
-// CAVEAT, and it is the weakest claim in this file: only 0x02, 0x06, 0x07, 0x09 and 0x0c were seen on this
-// unit, and without the cloud bridge there is nothing here that confirms the NAMES — only that every value
-// observed falls inside the sibling's table and carries a plausible default cycle time. Course tables are
-// the most market- and model-specific part of these protocols. A single dial sweep captured with
-// `rethink-capture --cloud` would settle all fourteen positions.
+// Course identifier -> name. Every one of the twelve dial positions was confirmed by turning the dial one
+// stop at a time and reading the cloud's apCourseFLUpper25inchBaseUS, then cross-checked against the
+// printed control panel. This table is NOT the sibling's — it disagrees at nine of twelve positions.
+// 0x00 and 0xFE are both no-selection sentinels (0xFE is what this model parks on at power-off).
 const COURSE: Record<number, string> = {
     0x01: 'Tub Clean',
-    0x02: 'Bright Whites',
-    0x03: 'Allergiene',
-    0x04: 'Sanitary',
-    0x05: 'Bedding',
-    0x06: 'Heavy Duty',
-    0x07: 'Normal',
-    0x08: 'Sportswear',
-    0x09: 'Perm Press',
-    0x0a: 'Delicates',
-    0x0b: 'Towels',
-    0x0c: 'Speed Wash',
-    0x0d: 'Rinse+Spin',
-    0x0e: 'Small Load',
+    0x02: 'Allergiene',
+    0x03: 'Sanitary',
+    0x04: 'Bedding',
+    0x05: 'Heavy Duty',
+    0x06: 'Normal',
+    0x07: 'Bright Whites',
+    0x08: 'Perm Press',
+    0x09: 'Delicates',
+    0x0a: 'Towels',
+    0x0b: 'Speed Wash',
+    0x0c: 'Downloaded',
 }
 
-// Soil / Spin / Temp index tables, also inherited from the sibling. These are sequential index encodings
-// rather than bitfields, which is the kind of mapping LG shares across a platform, and every value seen on
-// this unit (soil 0/3, spin 0/3/4/5, temp 0/2/4/6) lands inside the sibling's table. Index 0 means "not
-// applicable" and is reported as unknown — it is what the machine shows once it stops using the setting
-// (soil drops to 0 when washing ends, temp when spinning starts).
+// Soil / Spin / Temp index tables, each stepped through every position against the cloud's soilWash, spin
+// and temp enums. These match the sibling exactly. Index 0 means "not applicable" and reports as unknown —
+// it is what the machine shows once a setting stops applying (soil drops to 0 when washing ends, temp when
+// spinning starts, and both while Rinse+Spin is selected).
 const SOIL: Record<number, string> = {
     1: 'Light',
     2: 'Light-Normal',
@@ -207,6 +225,15 @@ export default class Device extends AABBDevice {
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                     },
+                    reserve_time: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-reserve_time',
+                        state_topic: '$this/reserve_time',
+                        name: 'Delay Wash time remaining',
+                        icon: 'mdi:clock-outline',
+                        device_class: 'duration',
+                        unit_of_measurement: 'min',
+                    },
                     soil: {
                         platform: 'sensor',
                         unique_id: '$deviceid-soil',
@@ -228,6 +255,71 @@ export default class Device extends AABBDevice {
                         name: 'Temperature',
                         icon: 'mdi:thermometer',
                     },
+                    rinse_count: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-rinse_count',
+                        state_topic: '$this/rinse_count',
+                        name: 'Rinses remaining',
+                        icon: 'mdi:water-sync',
+                        state_class: 'measurement',
+                    },
+                    extra_rinse: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-extra_rinse',
+                        state_topic: '$this/extra_rinse',
+                        name: 'Extra rinse',
+                        icon: 'mdi:water-plus',
+                    },
+                    extra_rinse_count: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-extra_rinse_count',
+                        state_topic: '$this/extra_rinse_count',
+                        name: 'Extra rinse count',
+                        icon: 'mdi:water-plus',
+                        state_class: 'measurement',
+                    },
+                    pre_wash: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-pre_wash',
+                        state_topic: '$this/pre_wash',
+                        name: 'Pre-wash',
+                        icon: 'mdi:water-sync',
+                    },
+                    steam: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-steam',
+                        state_topic: '$this/steam',
+                        name: 'Steam',
+                        icon: 'mdi:kettle-steam',
+                    },
+                    cold_wash: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-cold_wash',
+                        state_topic: '$this/cold_wash',
+                        name: 'Cold wash',
+                        icon: 'mdi:snowflake',
+                    },
+                    rinse_spin: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-rinse_spin',
+                        state_topic: '$this/rinse_spin',
+                        name: 'Rinse + Spin',
+                        icon: 'mdi:water-sync',
+                    },
+                    delay_wash: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-delay_wash',
+                        state_topic: '$this/delay_wash',
+                        name: 'Delay Wash',
+                        icon: 'mdi:clock-plus-outline',
+                    },
+                    child_lock: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-child_lock',
+                        state_topic: '$this/child_lock',
+                        name: 'Control lock',
+                        icon: 'mdi:lock-outline',
+                    },
                     door: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-door',
@@ -243,11 +335,20 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:lock', // NOT device_class 'lock' — that class is inverted (on = unlocked)
                         entity_category: 'diagnostic',
                     },
-                    cycle_count: {
+                    load_level: {
                         platform: 'sensor',
-                        unique_id: '$deviceid-cycle_count',
-                        state_topic: '$this/cycle_count',
-                        name: 'Cycles completed',
+                        unique_id: '$deviceid-load_level',
+                        state_topic: '$this/load_level',
+                        name: 'Load level',
+                        icon: 'mdi:weight',
+                        state_class: 'measurement',
+                        entity_category: 'diagnostic',
+                    },
+                    tub_clean_count: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-tub_clean_count',
+                        state_topic: '$this/tub_clean_count',
+                        name: 'Washes since Tub Clean',
                         icon: 'mdi:counter',
                         state_class: 'total_increasing',
                         entity_category: 'diagnostic',
@@ -286,31 +387,37 @@ export default class Device extends AABBDevice {
             'initial_time',
             idle ? 0 : rec[INITIAL_TIME_HOUR_OFFSET] * 60 + rec[INITIAL_TIME_MIN_OFFSET],
         )
+        this.publishProperty('reserve_time', isOff ? 0 : rec[RESERVE_HOUR_OFFSET] * 60 + rec[RESERVE_MIN_OFFSET])
         this.publishProperty('soil', SOIL[rec[SOIL_OFFSET]] ?? 'unknown')
         this.publishProperty('spin', SPIN[rec[SPIN_OFFSET]] ?? 'unknown')
         this.publishProperty('temp', TEMP[rec[TEMP_OFFSET]] ?? 'unknown')
-        this.publishProperty('door', rec[DOOR_OFFSET] === DOOR_CLOSED ? 'OFF' : 'ON')
-        this.publishProperty('door_lock', (rec[OPT2_OFFSET] & OPT2_DOOR_LOCKED) !== 0 ? 'ON' : 'OFF')
-        this.publishProperty('cycle_count', rec[CYCLE_COUNT_OFFSET])
 
-        // Declared entities intentionally omitted rather than published wrong. The capture behind this
-        // driver is passive — three real Heavy Duty cycles with no options toggled and no cloud bridge —
-        // so the following are known to EXIST but are not pinned down, and a session driving the panel
-        // with `rethink-capture --cloud` would close all of them out:
-        //   * The rec[15] option bitfield (extra rinse / pre-wash / steam / TurboWash / delay-active) and
-        //     the rec[16] cold-wash bit. Only one bit was ever seen set (rec[15] 0x04, on the course
-        //     default of a single dial position). Inheriting the sibling's bit positions unverified is
-        //     exactly the mistake the RV13B6ES dryer caught: Wrinkle Care had moved bitfields there and
-        //     would have read permanently OFF.
-        //   * rec[11], the low nibble of which counts down through the cycle (a per-course value of 2-3
-        //     while selecting, decrementing during Rinsing, reaching 0 by Spinning). This looks like
-        //     rinses remaining, but it is NOT the sibling's static extra-rinse-count setting, so the
-        //     sibling's decoding of this byte is not reused.
-        //   * rec[24], which is 0 while idle and then latches to a per-cycle constant (4, 2 and 3 on the
-        //     three runs) the instant Sensing hands over to Washing. Consistent with a measured load
-        //     level, but one dial-sweep frame broke the pattern, so it is left alone.
-        //   * rec[13:15], the sibling's Delay Wash reserve clock: constant zero here, never exercised.
-        //   * rec[19] and rec[21] change with no interpretation yet; error codes, child lock and remote
-        //     start remain unlocated, as on the sibling.
+        this.publishProperty('rinse_count', rec[RINSE_OFFSET] & 0x0f)
+        this.publishProperty('extra_rinse_count', rec[RINSE_OFFSET] >> 4)
+
+        const flags = rec[FLAGS_OFFSET]
+        this.publishProperty('child_lock', (flags & FLAG_CHILD_LOCK) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('delay_wash', (flags & FLAG_DELAY_ACTIVE) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('steam', (flags & FLAG_STEAM) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('pre_wash', (flags & FLAG_PRE_WASH) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('rinse_spin', (flags & FLAG_RINSE_SPIN) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('extra_rinse', (flags & FLAG_EXTRA_RINSE) !== 0 ? 'ON' : 'OFF')
+
+        const opt2 = rec[OPT2_OFFSET]
+        this.publishProperty('cold_wash', (opt2 & OPT2_COLD_WASH) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('door_lock', (opt2 & OPT2_DOOR_LOCKED) !== 0 ? 'ON' : 'OFF')
+
+        this.publishProperty('door', rec[DOOR_OFFSET] === DOOR_CLOSED ? 'OFF' : 'ON')
+        this.publishProperty('load_level', rec[LOAD_LEVEL_OFFSET])
+        this.publishProperty('tub_clean_count', rec[TCL_COUNT_OFFSET])
+
+        // Declared entities intentionally omitted rather than published wrong:
+        //   * remote_start — the cloud reports it, but it moved in lockstep with the rec[16] door-lock bit
+        //     for the whole capture, so no independent bit could be isolated.
+        //   * turbo_wash — this model has no such button; the sibling's rec[15] bit 0x80 is left unmapped.
+        //   * error, smartGridEnable — never exercised (no fault occurred during the capture).
+        //   * the Signal (beeper volume) setting, which the LG cloud does not report for this model.
+        //   * rec[17] bit 0x10 (sets during Add Garments and Pause), and rec[18/19/21/23], which move
+        //     without a matching cloud field.
     }
 }

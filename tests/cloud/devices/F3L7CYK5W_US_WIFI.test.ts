@@ -8,77 +8,100 @@ const DEVICE_ID = 'test-id'
 const MODEL_ID = 'F3L7CYK5W_US_WIFI'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '0.0.0' }
 
-// All fixtures are REAL frames, lifted from a passive capture of three complete wash cycles on the
-// physical machine. Unlike the dryer driver's fixtures there is no LG cloud bridge behind these, so the
-// comments name the observed behaviour that confirms each offset rather than a cloud field.
+// All fixtures are REAL frames captured from the physical machine, each cross-checked against the LG
+// cloud's own decoded washerDryer state at matching timestamps. The comments name the cloud field that
+// confirmed each one. Cloud events were filtered on matchesDevice — the dryer on the same account emits
+// washerDryer updates sharing key names (state, preState, temp) that would otherwise corrupt the mapping.
 
-// Single-record 0xEB frame, powered off — what the machine sends on reconnect.
-const EB_OFF = buf('aa2020eb00180000010000fe0000000000000000000000000005332b00001abb')
-
-// Dial sweep, stopped on a second course: proves the course byte moves independently of everything else.
-const DIAL_PERM_PRESS = buf(
-    'aa3a20ec001805010c010c070003040603000000000000000000332b000000180500290029090003030202000000000000000000332b0007d6bb',
+// --- dial sweep: the course table is this model's own, and disagrees with F3L2CYU__ at nine of twelve
+// positions. Course 0x06 is NORMAL here; the sibling's table calls it Heavy Duty.
+const DIAL_SPEED_WASH = buf(
+    'aa3a20ec001805010101010a0003050403000000000000000000332e0000001805000f000f0b0001050601000000000000000000332e000713bb',
+)
+const DIAL_DOWNLOADED = buf(
+    'aa3a20ec001805000f000f0b0001050601000000000000000000332e0007001805002d002d0c0003050402000000000000000000332e0f00f9bb',
+)
+const DIAL_TUB_CLEAN = buf(
+    'aa3a20ec001805002d002d0c0003050402000000000000000000332e0f00001805011d011d010000030002000000040000000000332e0000e0bb',
+)
+const DIAL_NORMAL = buf(
+    'aa3a20ec00180502150215050005050402000000000000000000332e000000180501030103060003040402000000000000000000332e00001fbb',
 )
 
-// Power on with a course already selected. While Selecting, rec[2:4] and rec[4:6] agree (both 63 min).
+// --- single-variable option toggles, each confirmed against the cloud enum named in the test
+const COLD_WASH_ON = buf(
+    'aa3a20ec00180501210121060003030702000000000000000000332e000000180501170117060003030202000000001000000000332e0000c0bb',
+)
+const EXTRA_RINSE_2 = buf(
+    'aa3a20ec001805010e010e060003030412000000400000000000332e000000180501190119060003030422000000400000000000332e000047bb',
+)
+const CHILD_LOCK_ON = buf(
+    'aa3a20ec00180501030103060003040402000000000000000000332e000000180501030103060003040402000000010000000000332e000076bb',
+)
+const STEAM_ON = buf(
+    'aa3a20ec00180501030103060003040402000000000000000000332e0000001805021c021c060000040002000000040000000000332e000006bb',
+)
+const PRE_WASH_ON = buf(
+    'aa3a20ec00180501030103060003040402000000000000000000332e000000180501120112060003040402000000080000000000332e00001dbb',
+)
+const DELAY_2H = buf(
+    'aa3a20ec00180501030103060003040402000000000000000000332e000000180501030103060003040402000200020000000000332e000073bb',
+)
+const RINSE_SPIN_ON = buf(
+    'aa3a20ec00180501000100040003030402000000000000000100332e0007001805000c000c040000030001000000200000000100332e00071bbb',
+)
+
+// --- a real Rinse+Spin run, including Add Garments pressed mid-cycle
+const RINSING = buf(
+    'aa3a20ec001805000c000c040000030001000000200000000100332e000700181e000c000c040000030001000000208000000105332e00074fbb',
+)
+const ADD_GARMENTS = buf(
+    'aa3a20ec00181e000c000c040000030001000000208002000005332e0007001815000c000c04000003000100000020001200001e332e00070fbb',
+)
+const PAUSED = buf(
+    'aa3a20ec001815000c000c04000003000100000020001200001e332e0007001806000c000c040000030001000000200010000015332e0007b5bb',
+)
+const RUN_COMPLETE = buf(
+    'aa3a20ec0018280001000c040000030000000000208002000e1e332e000700183c00010000fe0000000000000000000000000e28332e000031bb',
+)
+
+// --- frames from an earlier passive capture of three full Normal cycles (no cloud bridge; these are the
+// ones that establish the timer and cycle-counter behaviour over a complete wash)
+const EB_OFF = buf('aa2020eb00180000010000fe0000000000000000000000000005332b00001abb')
 const SELECTING = buf(
     'aa3a20ec00180000010000fe0000000000000000000000000005332b000000180501030103060003040402000000008000000000332b0000d5bb',
 )
-
-// Selecting -> Sensing. This model emits 0x14 as a real, distinct step, which the F3L2CYU__ sibling
-// documents as unconfirmed because its capture never produced one.
 const SENSING = buf(
     'aa3a20ec00180501030103060003040402000000008000000000332b000000181401030103060003040402000000008000000005332b000065bb',
 )
-
-// Door pulled shut during Sensing: rec[17] 0x00 -> 0x02 with the rec[16] lock bit untouched.
 const DOOR_CLOSES = buf(
     'aa3a20ec00181401030103060003040402000000008000000005332b000000181401030103060003040402000000008002000005332b000013bb',
 )
-
-// Sensing -> Washing. The cycle time is re-estimated to 80 min and rec[4:6] PINS there; rec[20] holds the
-// previous phase (0x14 Sensing) and rec[24] latches its per-cycle value.
 const WASHING_START = buf(
     'aa3a20ec00181401030103060003040402000000008002000005332b000000181701140114060003040402000000008002000014332b0004d5bb',
 )
-
-// One minute later: rec[2:4] is 79 while rec[4:6] is still 80. This pair is the whole case for a separate
-// initial-time field, and would be invisible if this model were aliased to F3L2CYU__.
 const WASHING_MINUTE_LATER = buf(
     'aa3a20ec00181701140114060003040402000000008002000014332b000400181701130114060003040402000000008002000114332b0004edbb',
 )
-
-// Washing -> Rinsing: soil drops to its not-applicable 0 while the initial estimate holds at 80.
-const RINSING = buf(
+const WASHING_TO_RINSING = buf(
     'aa3a20ec001817003a0114060003040402000000008002002414332b000400181e00390114060000040402000000008002002617332b000407bb',
 )
-
-// Rinsing -> Spinning: temperature drops to not-applicable in turn.
 const SPINNING = buf(
     'aa3a20ec00181e00150114060000040401000000008002003f17332b00040018280014011406000004000000000000800200411e332b00041abb',
 )
-
-// Spinning -> Complete: the door unlocks and unlatches, the course parks on the 0xFE sentinel, and the
-// cycle counter ticks 0x2b -> 0x2c. That increment happened at this transition and nowhere else.
-const COMPLETE = buf(
+const CYCLE_COMPLETE = buf(
     'aa3a20ec0018280001011406000004000000000000800200671e332b000400183c00010000fe0000000000000000000000006c28332c0000aabb',
 )
-
-// Complete -> Off, ~30 seconds later.
 const OFF = buf(
     'aa3a20ec00183c00010000fe0000000000000000000000006c28332c000000180000010000fe0000000000000000000000006c3c332c000001bb',
 )
-
-// A 0xE2 frame captured 15s AFTER the cycle above completed. It is 28 bytes with a valid 0x18 record at
-// offset 3 — structurally indistinguishable from 0xEB — but replays the START of the finished cycle
-// (Sensing, 63 min, cycle counter still 0x2b). Decoding it would undo the Complete state.
-const E2_STALE_REPLAY = buf('aa2020e203181401030103060003040402000000008000006c05332b000030bb')
-
-// The second run, which started from a different estimate (58 min) — guards against the 80 above being
-// baked in as a constant somewhere.
 const SECOND_RUN_WASHING = buf(
     'aa3a20ec00181401030103060003040402000000008002000005332d0000001817003a003a060003040402000000008002000014332d000398bb',
 )
+
+// A 0xE2 frame captured 15s AFTER a cycle completed. 28 bytes with a valid 0x18 record at offset 3 —
+// structurally indistinguishable from 0xEB — but it replays the START of the finished cycle.
+const E2_STALE_REPLAY = buf('aa2020e203181401030103060003040402000000008000006c05332b000030bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -100,27 +123,28 @@ describe('F3L7CYK5W_US_WIFI', () => {
         assert.equal(p.status, 'Off')
         assert.equal(p.course, 'unknown') // 0xFE is the no-selection sentinel
         assert.equal(p.remaining_time, 0)
-        assert.equal(p.cycle_count, 43)
+        assert.equal(p.tub_clean_count, 43)
+    })
+
+    // This is the test that would fail if this model were aliased to F3L2CYU__: the sibling's table maps
+    // 0x06 to Heavy Duty, 0x0b to Rinse+Spin and 0x0c to Speed Wash.
+    test('the course table is this model’s own, not the sibling’s', () => {
+        assert.equal(feed([DIAL_NORMAL]).course, 'Normal') // cloud: NORMAL (sibling says Heavy Duty)
+        assert.equal(feed([DIAL_SPEED_WASH]).course, 'Speed Wash') // cloud: SPEEDWASH
+        assert.equal(feed([DIAL_DOWNLOADED]).course, 'Downloaded') // cloud: DOWNLOAD
+        assert.equal(feed([DIAL_TUB_CLEAN]).course, 'Tub Clean') // cloud: TUB_CLEAN
     })
 
     test('while selecting, remaining and initial time agree', () => {
         const p = feed([SELECTING])
         assert.equal(p.power, 'ON')
-        assert.equal(p.status, 'Selecting')
-        assert.equal(p.course, 'Heavy Duty')
+        assert.equal(p.status, 'Initial')
+        assert.equal(p.course, 'Normal')
         assert.equal(p.soil, 'Normal')
         assert.equal(p.spin, 'High')
         assert.equal(p.temp, 'Warm')
         assert.equal(p.remaining_time, 63)
         assert.equal(p.initial_time, 63)
-    })
-
-    test('the course byte moves independently of the settings bytes', () => {
-        const p = feed([DIAL_PERM_PRESS])
-        assert.equal(p.course, 'Perm Press')
-        assert.equal(p.remaining_time, 41)
-        assert.equal(p.spin, 'Medium')
-        assert.equal(p.temp, 'Cold')
     })
 
     test('Sensing is a real distinct phase on this model', () => {
@@ -129,17 +153,57 @@ describe('F3L7CYK5W_US_WIFI', () => {
         assert.equal(p.remaining_time, 63)
     })
 
+    test('rec[11] packs rinse count and extra-rinse count in separate nibbles', () => {
+        const plain = feed([DIAL_NORMAL])
+        assert.equal(plain.rinse_count, 2) // cloud: RINSE_2
+        assert.equal(plain.extra_rinse_count, 0) // cloud: NO_EXTRARINSE
+        assert.equal(plain.extra_rinse, 'OFF')
+
+        const extra = feed([EXTRA_RINSE_2])
+        assert.equal(extra.extra_rinse, 'ON') // cloud: EXTRARINSE_ON
+        assert.equal(extra.extra_rinse_count, 2) // cloud: EXTRARINSE_2
+        assert.equal(extra.rinse_count, 2) // the low nibble is untouched by the extra-rinse button
+    })
+
+    test('the rec[15] option bits each isolate cleanly', () => {
+        const lock = feed([CHILD_LOCK_ON])
+        assert.equal(lock.child_lock, 'ON') // cloud: CHILDLOCK_ON — the sibling has no bit for this
+        assert.equal(lock.steam, 'OFF')
+        assert.equal(lock.pre_wash, 'OFF')
+        assert.equal(lock.delay_wash, 'OFF')
+
+        assert.equal(feed([STEAM_ON]).steam, 'ON') // cloud: STEAM_ON
+        assert.equal(feed([PRE_WASH_ON]).pre_wash, 'ON') // cloud: PREWASH_ON
+
+        const rs = feed([RINSE_SPIN_ON])
+        assert.equal(rs.rinse_spin, 'ON') // cloud: RINSE_SPIN_ON — also absent from the sibling
+        assert.equal(rs.child_lock, 'OFF')
+        assert.equal(rs.extra_rinse, 'OFF')
+    })
+
+    test('cold wash sits in the other bitfield and forces the temperature index', () => {
+        const p = feed([COLD_WASH_ON])
+        assert.equal(p.cold_wash, 'ON') // cloud: COLDWASH_ON
+        assert.equal(p.temp, 'Cold') // cloud: TEMP_COLD
+        assert.equal(p.child_lock, 'OFF') // rec[15] untouched
+    })
+
+    test('delay wash exposes its reserve clock', () => {
+        const p = feed([DELAY_2H])
+        assert.equal(p.delay_wash, 'ON') // cloud: DELAY_ON
+        assert.equal(p.reserve_time, 120) // cloud: reserveTimeHour 2
+    })
+
     test('the door sensor is independent of the door lock', () => {
         const open = feed([SENSING])
         assert.equal(open.door, 'ON') // ON = open
         assert.equal(open.door_lock, 'ON') // already locked while the door reads open
 
         const shut = feed([SENSING, DOOR_CLOSES])
-        assert.equal(shut.door, 'OFF')
+        assert.equal(shut.door, 'OFF') // cloud: DOORCLOSE_ON
         assert.equal(shut.door_lock, 'ON')
     })
 
-    // This is the test that would fail if this model were aliased to F3L2CYU__.
     test('initial time pins when the cycle starts while remaining time counts down', () => {
         const start = feed([SENSING, WASHING_START])
         assert.equal(start.status, 'Washing')
@@ -156,27 +220,42 @@ describe('F3L7CYK5W_US_WIFI', () => {
         assert.equal(second.initial_time, 58)
     })
 
+    test('Add Garments unlocks the door mid-cycle and Pause follows it', () => {
+        const running = feed([RINSE_SPIN_ON, RINSING])
+        assert.equal(running.status, 'Rinsing')
+        assert.equal(running.door_lock, 'ON')
+        assert.equal(running.load_level, 7) // cloud: loadLevel 7
+
+        const adding = feed([RINSE_SPIN_ON, RINSING, ADD_GARMENTS])
+        assert.equal(adding.status, 'Add Garments') // cloud: ADD_DRAIN
+        assert.equal(adding.door_lock, 'OFF') // the whole point of the feature
+
+        const paused = feed([RINSE_SPIN_ON, RINSING, ADD_GARMENTS, PAUSED])
+        assert.equal(paused.status, 'Pause') // cloud: PAUSE
+        assert.equal(paused.door_lock, 'OFF')
+    })
+
     test('a real run: Washing -> Rinsing -> Spinning, settings drop out as they stop applying', () => {
-        const rinsing = feed([WASHING_START, RINSING])
+        const rinsing = feed([WASHING_START, WASHING_TO_RINSING])
         assert.equal(rinsing.status, 'Rinsing')
         assert.equal(rinsing.soil, 'unknown') // soil index goes to 0 once washing ends
         assert.equal(rinsing.temp, 'Warm')
         assert.equal(rinsing.initial_time, 80)
 
-        const spinning = feed([WASHING_START, RINSING, SPINNING])
+        const spinning = feed([WASHING_START, WASHING_TO_RINSING, SPINNING])
         assert.equal(spinning.status, 'Spinning')
         assert.equal(spinning.temp, 'unknown')
         assert.equal(spinning.door_lock, 'ON')
     })
 
-    test('completing a cycle unlocks the door and increments the cycle counter', () => {
+    test('completing a cycle unlocks the door and increments the tub-clean counter', () => {
         const before = feed([WASHING_START, SPINNING])
-        assert.equal(before.cycle_count, 43)
+        assert.equal(before.tub_clean_count, 43)
 
-        const done = feed([WASHING_START, SPINNING, COMPLETE])
+        const done = feed([WASHING_START, SPINNING, CYCLE_COMPLETE])
         assert.equal(done.status, 'Complete')
         assert.equal(done.power, 'ON') // Complete is still powered on
-        assert.equal(done.cycle_count, 44)
+        assert.equal(done.tub_clean_count, 44) // cloud: TCLCount
         assert.equal(done.door_lock, 'OFF')
         assert.equal(done.door, 'ON')
         // a finished washer must not advertise a stale minute of remaining time
@@ -184,8 +263,15 @@ describe('F3L7CYK5W_US_WIFI', () => {
         assert.equal(done.initial_time, 0)
     })
 
+    test('the Rinse+Spin run also lands on Complete', () => {
+        const p = feed([RINSING, RUN_COMPLETE])
+        assert.equal(p.status, 'Complete')
+        assert.equal(p.course, 'unknown') // parks on the 0xFE sentinel
+        assert.equal(p.tub_clean_count, 46)
+    })
+
     test('powering off clears the selection', () => {
-        const p = feed([WASHING_START, SPINNING, COMPLETE, OFF])
+        const p = feed([WASHING_START, SPINNING, CYCLE_COMPLETE, OFF])
         assert.equal(p.status, 'Off')
         assert.equal(p.power, 'OFF')
         assert.equal(p.course, 'unknown')
@@ -194,15 +280,13 @@ describe('F3L7CYK5W_US_WIFI', () => {
 
     test('0xE2 post-cycle replay frames are ignored, not treated as status', () => {
         // fed straight after a completed cycle, this frame must not drag the machine back to Sensing
-        const p = feed([WASHING_START, SPINNING, COMPLETE, E2_STALE_REPLAY])
+        const p = feed([WASHING_START, SPINNING, CYCLE_COMPLETE, E2_STALE_REPLAY])
         assert.equal(p.status, 'Complete')
-        assert.equal(p.cycle_count, 44) // not rolled back to the frame's stale 43
+        assert.equal(p.tub_clean_count, 44) // not rolled back to the frame's stale 43
         assert.equal(p.remaining_time, 0) // not the frame's stale 63
     })
 
     test('frames that are not status frames publish nothing', () => {
-        // a 0xD8 heartbeat, a 0x72 ping and a truncated 0xEC must all be ignored rather than decoded
-        // from whatever bytes happen to sit at the status offsets
         for (const junk of ['aa0720d800fcbb', 'aa09207200c9005bbb', 'aa0a20ec001805010cbb']) {
             const { ha, thinq } = makeDevice()
             thinq.emit('data', buf(junk))
